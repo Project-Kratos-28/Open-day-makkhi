@@ -1,0 +1,11 @@
+# Python 3.12. Versions used for the results in DECISIONS.md.
+numpy==2.5.4
+pandas==3.1.0
+scipy==1.18.1
+torch==2.14.1
+gymnasium==1.4.0
+pybullet==3.2.7
+matplotlib==3.11.2
+neuprint-python==0.6.4
+# Drone simulator (pinned to the commit used here):
+gym-pybullet-drones @ git+https://github.com/utiasDSL/gym-pybullet-drones.git@f83fbdd

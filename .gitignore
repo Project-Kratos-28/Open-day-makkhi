@@ -1,0 +1,15 @@
+# Python environment and caches
+venv/
+__pycache__/
+*.pyc
+
+# Third-party simulator: installed from its own repository (see README / requirements.txt)
+gym-pybullet-drones/
+
+# Training outputs (large: trained networks, snapshots, logs). Keep only the results tables.
+runs/*
+!runs/eval_results.csv
+pilot_goalsight/runs/
+
+# Temporary files
+*.tmp
