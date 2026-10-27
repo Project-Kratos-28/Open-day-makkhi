@@ -15,7 +15,7 @@ learns navigation, not low-level stabilisation.
 
 Observation (all egocentric, i.e. relative to the drone's heading):
     N_RAYS lidar readings around the drone (0 = nothing in range, 1 = touching)
-    sin/cos of the goal's bearing, distance to goal
+    sin/cos of the goal's bearing, distance to goal, goal in line of sight (1/0)
     forward and sideways speed, last turn command, height error
 
 Run this file directly for a scripted smoke test: python src/maze_env.py [--gui]
@@ -36,7 +36,7 @@ N_RAYS = 32             # 11.25 deg apart; with 16 (22.5 deg) thin wall ends sli
 RAY_RANGE = 1.5
 MAX_SPEED = 1.0         # m/s
 MAX_TURN_RATE = 2.0     # rad/s
-GOAL_RADIUS = 0.3
+GOAL_RADIUS = 0.4       # was 0.3: at full speed the drone's turning circle (~0.5 m) made it orbit just outside
 EPISODE_SEC = 20
 CLEARANCE = 0.6         # keep obstacles this far from start and goal
 
@@ -52,7 +52,7 @@ SPEED_BONUS = 0.01
 GOAL_REWARD = 10.0
 CRASH_PENALTY = 10.0
 
-OBS_DIM = N_RAYS + 3 + 4
+OBS_DIM = N_RAYS + 4 + 4
 ACT_DIM = 2
 
 
@@ -184,11 +184,24 @@ class MazeAviary(BaseRLAviary):
         vx, vy = self.vel[0, :2]
         obs = np.concatenate([
             self._lidar(),
-            [np.sin(bearing), np.cos(bearing), self._goal_dist() / (2 * ARENA_HALF)],
+            [np.sin(bearing), np.cos(bearing), self._goal_dist() / (2 * ARENA_HALF), self._goal_visible()],
             [(c * vx + s * vy) / MAX_SPEED, (-s * vx + c * vy) / MAX_SPEED,
              self.turn_cmd, (FLY_HEIGHT - self.pos[0, 2]) / FLY_HEIGHT],
         ])
         return obs.astype(np.float32)
+
+    def _goal_visible(self):
+        """1 if there's a clear line of sight from the drone to the goal, else 0. Tells the
+        network when the goal's direction can be trusted (in a maze it usually points
+        through a wall, so trained networks learned to ignore it, even in the goal's own cell)."""
+        pos = self.pos[0]
+        target = np.array([*self.goal, pos[2]])
+        d = target - pos
+        n = np.linalg.norm(d)
+        if n < 0.07:
+            return 1.0
+        hit = p.rayTest(list(pos + 0.065 * d / n), list(target), physicsClientId=self.CLIENT)[0]
+        return 1.0 if hit[0] == -1 else 0.0
 
     def _crashed(self):
         drone = self.DRONE_IDS[0]

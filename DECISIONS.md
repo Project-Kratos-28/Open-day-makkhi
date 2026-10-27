@@ -911,6 +911,119 @@ when close. Instead:
   success, goal near-misses, and steering response with and without the goal in sight.
 - **Waiting for your go-ahead to start.**
 
+## Step 17: Maze runs finished; pilot started; plan for tomorrow (2026-10-27, 02:45)
+
+- **All 20 maze runs finished training** (02:09). Best-version picking was started, then
+  stopped once the pilot finished. Those runs will be replaced by the goal-sight version,
+  and their picking and testing can be rerun at any time (`select_best.py`,
+  `evaluate.py --task grid`) if needed.
+- **Goal-sight pilot (one real-fly network, seed 0), training-time numbers at matched points:**
+
+| Point | Pilot | Old seed-0 run |
+|---|---|---|
+| Update 296 | 64% success, 4% timeouts | 59% success, 14% timeouts |
+| Update 752 | 73% success, 18% crashes, 9% timeouts | 65% success, 22% crashes, 13% timeouts |
+
+- **Pilot result (finished 03:16; compared with the old seed-0 run, both at update 1,220):**
+
+| Measure | Pilot (goal sight) | Old run |
+|---|---|---|
+| Training success (last 40 updates) | **83%** | 72% |
+| 30 practice mazes (4×4–6×6): goals | **22** | 18 |
+| crashes | 5 | 4 |
+| timeouts | **3** | 8 |
+| near-misses at the goal | **0** | 1 |
+| Steering toward the goal within 2 m, goal **visible** | **+0.32** | +0.05 |
+| Steering toward the goal within 2 m, goal **hidden** | +0.04 | +0.02 |
+
+  **The network learned to use the sensor.** It steers about 6× more strongly toward a goal it can
+  see, and still ignores the direction when a wall is in the way. So the gain isn't only the
+  bigger goal circle. Caveat: one run vs one run, and +0.32 is still far from full "beeline" steering.
+  (The analysis script now uses one CPU thread per analysis; with all 24 threads it crawled.)
+- **Decision (yours):** after the pilot, stop for the night. Tomorrow, retrain everything with
+  the goal-sight changes (the line-of-sight sensor and the 0.40 m goal circle). That means
+  moving them from `pilot_goalsight/src` into `src/`, archiving the current maze runs, and
+  rerunning the 20 maze runs and the 20 obstacle runs. Then the tuned GRU (and dense, if time).
+
+## Step 18: Full retrain with the goal-sight fix (started 2026-10-27, 13:11)
+
+- **The fix moved into the main code** (`src/maze_env.py`, the only file that differed from the
+  pilot copy): the "goal in line of sight" input and the 0.40 m goal circle. There are now 40 inputs.
+- **Networks still size-matched:**
+
+| Network | Trainable settings |
+|---|---|
+| Fly | 75,083 |
+| Dense (254 neurons) | 75,440 |
+| GRU (139 neurons) | 75,757 |
+
+- **Archived:** the last maze runs (without goal sight) in `runs/v5_maze_nosight/`, and the old
+  obstacle runs (16 rays, pre-fix) in `runs/v6_obstacles_16rays/`, together with their
+  `eval_results.csv`.
+- **One restartable script runs everything in order** (`src/run_everything.sh`, systemd unit
+  `everything`):
+  1. 20 maze runs;
+  2. best-version picking;
+  3. maze tests (best and final versions);
+  4. 20 obstacle runs;
+  5. obstacle test.
+
+  If stopped, run the same command again: finished runs are skipped, and the rest resume
+  from their save points.
+- **Expected:**
+
+| Stage | Expected around |
+|---|---|
+| Maze training done | 19:00 |
+| Maze tests done | 20:00 |
+| Obstacle training and test done | 01:30 |
+
+- **What actually happened (2026-10-27):**
+  - All 20 maze runs finished at 18:58, with no errors.
+  - Average training success over the last 60 updates:
+
+    | Network | Average success | Seeds |
+    |---|---|---|
+    | Real fly | ~84% | 83–85% |
+    | Shuffled | ~69% | 62–78% |
+    | GRU | ~67% | 59–72% |
+    | Dense | ~61% | 59–65% |
+
+    These are training numbers, not test results.
+  - Best-version picking turned out to be slow: each snapshot takes about 4–5 minutes, so the 920 snapshots need about 4 hours in total.
+  - Paused at 20:15 (no overnight power), partway through picking. That step has no save points, so it starts again from scratch when resumed (same command). Maze tests and obstacle runs come after it.
+
+## Step 19 — Pilot: longer memory training + trap practice (prepared 2026-10-27, not started)
+
+- **Problem (user-observed, `watch.py maze_conn_s2 --size 5`, 5th maze, seed 1004):**
+  - The drone went up from the start into a big dead-end area that leads towards the goal.
+  - It then flew back and forth between two dead ends for 40 s and timed out.
+  - It never went back past the start to take the real route along the bottom.
+- **How common it is:** on 20 practice mazes, `maze_conn_s0` (final version) timed out 4 times, and **all 4 were loops** (it entered some cell 3 or more times).
+- **Causes:**
+  1. Training only looks back 32 steps (about 1 s) through the network's memory, so remembering "I already checked that corridor" for longer is never trained directly.
+  2. The goal direction keeps pulling the drone back into dead ends that point towards the goal.
+  3. Watching and testing use the network's exact choice (no randomness), so a loop never breaks by chance.
+- **Fix 1 (longer memory training):** `--chunk-len` goes from 32 to **128** steps (about 4.3 s).
+  - This is the same for every network, since it is purely a training setting.
+  - It costs time. In a 4-update test run on its own: 1280 steps/s at 32, 840 at 128, 650 at 256.
+  - 256 (the whole 8.5 s rollout) would make training about 2 times slower; 128 makes it about 1.5 times slower. We picked 128 as the middle ground: it covers a trip into a dead end and back.
+- **Fix 3 (trap practice), and why it isn't simply "more dead ends":**
+  - I measured the current mazes first. They already have plenty of dead ends: 5×5 mazes have 2–6 dead ends, and the deepest detour is about 5–7 cells. Fewer loops (braid 0) barely changes this.
+  - What's missing is practice at *getting out of* a dead end against the pull of the goal.
+  - So **30% of training mazes start the drone at the end of a dead end, facing the end wall**, as if it had just flown in.
+  - The dead end is one of the 3 most misleading ones in that maze: those where the way out is longest compared with the straight-line distance to the goal.
+  - The time budget is based on the route from that start.
+- **Checks:**
+  - Practice and test mazes are **unchanged**: the first 40 seeds of each match the current code exactly (layout, start, heading, budget). That's because trap starts are only on in training and draw no extra random numbers otherwise.
+  - The scripted route-follower reaches the goal from 40 out of 40 trap starts.
+  - Hovering in place after a trap start never crashes (0 of 20).
+  - A 2-update training dry run works.
+- **The pilot:**
+  - One real fly network, seed 0, 5M steps. Start it with `bash pilot_memory/start_pilot.sh`.
+  - Compare it with `bash pilot_memory/analyze.sh`, which matches `runs/maze_conn_s0` at the same training update and flies both on the same 100 practice mazes. It reports goals, crashes, timeouts, how many timeouts were loops, and the 5×5–6×6 mazes on their own.
+- **Decision rule:** if the pilot has fewer loops and at least as many goals, both fixes go into the main code and all 20 maze runs are retrained, like the goal-sight pilot (Step 17).
+
 ## Status and what's next
 
 | Day | Task | Status |
@@ -922,8 +1035,8 @@ when close. Instead:
 | 5–8 | Shuffled-fly control (5 seeds) | ✅ finished 01:10 |
 | 5–8 | GRU standard-network baseline (5 seeds) | ✅ finished 02:12 |
 | 9 | Final test (20 networks × 3 levels × 100 mazes) + plots | ✅ done 02:40 |
-| next | Real mazes: full training (20 runs), all fixes up to Step 14 | 🔄 started 2026-10-26 17:52, expected ~23:20 |
-| next | Rerun the 20 obstacle runs with the fixed code | ⏳ after the mazes (when plugged in) |
+| next | Real mazes: full training (20 runs), all fixes up to Step 14 | ✅ finished 2026-10-27 02:09 (superseded by the goal-sight retrain) |
+| now | **Full retrain with goal sight:** 20 maze + 20 obstacle runs, plus tests (`src/run_everything.sh`) | 🔄 started 2026-10-27 13:11 |
 | later | **Tuned GRU:** short tuning runs (input layer, standard init, decaying learning rate, 1–2 learning rates), picked on practice mazes only; then 5 GRU seeds with the winner; report "GRU (untuned)" and "GRU (tuned)" side by side. If time: the same for the dense network. | ⏳ planned (2026-10-26). Why: the GRU was unstable (65% → 24%) using settings tuned on the fly network; an untuned baseline is an easy target for criticism. |
 
 **To resume the maze training** (picks up from each run's last save point, skips finished runs):

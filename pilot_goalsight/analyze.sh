@@ -15,5 +15,10 @@ for name, path in [("pilot (goal sight)", "runs/goalsight_conn_s0/log.csv"), ("o
     print(f"  {name:20s} {sum(v)/len(v):.0%} success (updates {u-39}-{u})")
 PY
 echo "== behaviour near the goal, 30 practice mazes (4x4-6x6)"
-$P analyze.py src runs goalsight_conn_s0 "$snap" 2>&1 | grep -v "^\[INFO\]\|pybullet build"
-$P analyze.py ../src ../runs maze_conn_s0 "$snap" 2>&1 | grep -v "^\[INFO\]\|pybullet build"
+# One CPU thread each (tiny networks: more threads only add overhead); both run side by side.
+export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1
+$P analyze.py src runs goalsight_conn_s0 "$snap" > /tmp/analyze_pilot_$$.txt 2>&1 &
+$P analyze.py ../src ../runs maze_conn_s0 "$snap" > /tmp/analyze_old_$$.txt 2>&1 &
+wait
+grep -hv "^\[INFO\]\|pybullet build" /tmp/analyze_pilot_$$.txt /tmp/analyze_old_$$.txt
+rm -f /tmp/analyze_pilot_$$.txt /tmp/analyze_old_$$.txt

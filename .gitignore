@@ -10,6 +10,7 @@ gym-pybullet-drones/
 runs/*
 !runs/eval_results.csv
 pilot_goalsight/runs/
+pilot_memory/runs/
 
 # Temporary files
 *.tmp
