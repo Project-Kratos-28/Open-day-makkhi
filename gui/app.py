@@ -5,6 +5,7 @@ Right Column: Metrics Cards and Dedicated Full-Size 3D Simulation Viewer.
 """
 import queue
 import sys
+import threading
 import tkinter as tk
 from tkinter import messagebox, ttk
 from typing import Any, Dict
@@ -37,6 +38,8 @@ class DroneMazeApp(tk.Tk):
 
         self.data_manager = DataManager()
         self.msg_queue: queue.Queue = queue.Queue()
+        self._frame_lock = threading.Lock()
+        self._latest_frame = None
 
         self.runner = SimulationRunner(
             on_frame=self._queue_frame,
@@ -71,7 +74,7 @@ class DroneMazeApp(tk.Tk):
 
         lbl_title = tk.Label(
             header,
-            text="Fruit Fly Connectome → Drone Maze Navigation",
+            text="Fruit Fly Connectome - Drone Maze Navigation",
             font=(THEME["font_family"], 13, "bold"),
             bg="#0f172a",
             fg="#38bdf8",
@@ -146,6 +149,7 @@ class DroneMazeApp(tk.Tk):
         self.viewer_view = ViewerView(
             right_col,
             on_camera_change=self.runner.set_camera_mode,
+            on_resolution_change=self.runner.set_render_resolution,
         )
         self.viewer_view.grid(row=1, column=0, sticky="nsew")
 
@@ -201,7 +205,10 @@ class DroneMazeApp(tk.Tk):
 
     # --- Thread-Safe Queue Handlers ---
     def _queue_frame(self, pil_img: Image.Image, telemetry: Dict[str, Any]) -> None:
-        self.msg_queue.put(("frame", (pil_img, telemetry)))
+        # Keep only the newest simulation frame. Old frames are discarded so a slow GUI
+        # never builds up a backlog and starts showing delayed or jumpy video.
+        with self._frame_lock:
+            self._latest_frame = (pil_img, telemetry)
 
     def _queue_line(self, line: str) -> None:
         self.msg_queue.put(("line", line))
@@ -221,13 +228,17 @@ class DroneMazeApp(tk.Tk):
     def _poll_queue(self) -> None:
         """Periodically processes updates from background simulation worker."""
         try:
+            with self._frame_lock:
+                latest_frame = self._latest_frame
+                self._latest_frame = None
+            if latest_frame is not None:
+                img, tel = latest_frame
+                self.viewer_view.update_frame(img, tel)
+
             while True:
                 item = self.msg_queue.get_nowait()
                 kind, payload = item
-                if kind == "frame":
-                    img, tel = payload
-                    self.viewer_view.update_frame(img, tel)
-                elif kind == "line":
+                if kind == "line":
                     self.logs_view.append_line(payload)
                 elif kind == "episode":
                     self.episodes_view.add_episode(payload)
@@ -245,7 +256,7 @@ class DroneMazeApp(tk.Tk):
         except queue.Empty:
             pass
         finally:
-            self.after(30, self._poll_queue)
+            self.after(16, self._poll_queue)
 
 
 def main() -> None:

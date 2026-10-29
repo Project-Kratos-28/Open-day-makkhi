@@ -73,6 +73,8 @@ class SimulationRunner:
         self._lock = threading.Lock()
         self.episode_results: List[EpisodeResult] = []
         self.camera_mode = "overview"  # "overview" or "chase"
+        self.render_width = 1920
+        self.render_height = 1080
 
     @property
     def is_running(self) -> bool:
@@ -81,6 +83,12 @@ class SimulationRunner:
 
     def set_camera_mode(self, mode: str) -> None:
         self.camera_mode = mode
+
+    def set_render_resolution(self, width: int, height: int) -> None:
+        """Updates the PyBullet frame size used by embedded simulations."""
+        if width >= 320 and height >= 180:
+            self.render_width = width
+            self.render_height = height
 
     def start(
         self,
@@ -111,6 +119,10 @@ class SimulationRunner:
             str(speed),
             "--seed",
             str(layout_seed),
+            "--width",
+            "1920",
+            "--height",
+            "1080",
         ]
 
         if embedded:
@@ -214,9 +226,41 @@ class SimulationRunner:
                     gui=False,
                 )
 
-            # Camera render dimensions
-            cam_w, cam_h = 480, 340
-            render_every_n_steps = 2  # render at ~30 FPS
+            # Load PyBullet's EGL hardware renderer so embedded frames use the NVIDIA GPU.
+            egl_plugin_id = -1
+            try:
+                import importlib.util
+                egl_spec = importlib.util.find_spec("eglRenderer")
+                if egl_spec and egl_spec.origin:
+                    egl_plugin_id = p.loadPlugin(
+                        egl_spec.origin,
+                        "_eglRendererPlugin",
+                        physicsClientId=env.CLIENT,
+                    )
+            except Exception as exc:
+                if self.on_line:
+                    self.on_line(f"[GPU Viewer Warning] EGL renderer unavailable: {exc}")
+
+            # Camera render dimensions can be changed live from the GUI.
+            cam_w = self.render_width
+            cam_h = self.render_height
+            render_every_n_steps = 1
+            last_render_wall_time = 0.0
+            renderer = p.ER_BULLET_HARDWARE_OPENGL if egl_plugin_id >= 0 else p.ER_TINY_RENDERER
+
+            fixed_view_mat = None
+            fixed_proj_mat = None
+            fixed_proj_size = None
+
+            fixed_view_mat = p.computeViewMatrixFromYawPitchRoll(
+                cameraTargetPosition=[0, 0, 0],
+                distance=2.6 * ARENA_HALF,
+                yaw=0,
+                pitch=-65,
+                roll=0,
+                upAxisIndex=2,
+                physicsClientId=env.CLIENT,
+            )
 
             for ep in range(episodes):
                 if self._stop_requested:
@@ -252,7 +296,12 @@ class SimulationRunner:
                     step_idx += 1
 
                     # Render frame
-                    if self.on_frame and (step_idx % render_every_n_steps == 0 or done):
+                    now_wall = time.time()
+                    render_due = step_idx % render_every_n_steps == 0 or done
+                    if self.on_frame and render_due and (done or now_wall - last_render_wall_time >= 0.033):
+                        cam_w = self.render_width
+                        cam_h = self.render_height
+                        last_render_wall_time = now_wall
                         drone_pos = env.pos[0]
                         if self.camera_mode == "chase":
                             view_mat = p.computeViewMatrixFromYawPitchRoll(
@@ -264,35 +313,34 @@ class SimulationRunner:
                                 upAxisIndex=2,
                                 physicsClientId=env.CLIENT,
                             )
-                        else:  # Overview
-                            view_mat = p.computeViewMatrixFromYawPitchRoll(
-                                cameraTargetPosition=[0, 0, 0],
-                                distance=2.6 * ARENA_HALF,
-                                yaw=0,
-                                pitch=-65,
-                                roll=0,
-                                upAxisIndex=2,
+                        else:  # Fixed overview camera; matrices are reused instead of recomputed.
+                            view_mat = fixed_view_mat
+
+                        if fixed_proj_mat is None or fixed_proj_size != (cam_w, cam_h):
+                            fixed_proj_mat = p.computeProjectionMatrixFOV(
+                                fov=60.0,
+                                aspect=float(cam_w) / float(cam_h),
+                                nearVal=0.1,
+                                farVal=30.0,
                                 physicsClientId=env.CLIENT,
                             )
-
-                        proj_mat = p.computeProjectionMatrixFOV(
-                            fov=60.0,
-                            aspect=float(cam_w) / float(cam_h),
-                            nearVal=0.1,
-                            farVal=30.0,
-                            physicsClientId=env.CLIENT,
-                        )
+                            fixed_proj_size = (cam_w, cam_h)
+                        proj_mat = fixed_proj_mat
 
                         cam_img = p.getCameraImage(
                             cam_w,
                             cam_h,
                             view_mat,
                             proj_mat,
-                            renderer=p.ER_TINY_RENDERER,
+                            renderer=renderer,
                             physicsClientId=env.CLIENT,
+                            shadow=1,
                         )
-                        rgba_data = np.reshape(cam_img[2], (cam_h, cam_w, 4)).astype(np.uint8)
-                        pil_img = Image.fromarray(rgba_data)
+                        # PyBullet may expose pixels as a tuple; normalize it before PIL decoding.
+                        pixel_bytes = cam_img[2]
+                        if not isinstance(pixel_bytes, (bytes, bytearray, memoryview)):
+                            pixel_bytes = bytes(pixel_bytes)
+                        pil_img = Image.frombytes("RGBA", (cam_w, cam_h), pixel_bytes, "raw", "RGBA")
 
                         cur_spd = float(np.linalg.norm(env.vel[0])) if hasattr(env, "vel") else 0.0
                         outcome_status = info.get("outcome") if info else None
@@ -322,6 +370,11 @@ class SimulationRunner:
                 self._update_live_summary()
                 time.sleep(0.4)
 
+            if egl_plugin_id >= 0:
+                try:
+                    p.unloadPlugin(egl_plugin_id, physicsClientId=env.CLIENT)
+                except Exception:
+                    pass
             env.close()
 
             # Final summary log line

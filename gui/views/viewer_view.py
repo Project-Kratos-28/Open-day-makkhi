@@ -11,12 +11,12 @@ from PIL import Image, ImageTk
 from gui.config import THEME
 
 RESOLUTION_PRESETS = {
-    "High (800x600)": (800, 600),
-    "Ultra HD (1024x768)": (1024, 768),
-    "HD Wide (960x540)": (960, 540),
-    "Standard (640x480)": (640, 480),
+    "Full HD (1920x1080)": (1920, 1080),
+    "Quad HD (2560x1440)": (2560, 1440),
+    "HD Wide (1280x720)": (1280, 720),
+    "Balanced (960x540)": (960, 540),
 }
-DEFAULT_RESOLUTION_NAME = "High (800x600)"
+DEFAULT_RESOLUTION_NAME = "Full HD (1920x1080)"
 
 
 class ViewerView(ttk.LabelFrame):
@@ -146,7 +146,11 @@ class ViewerView(ttk.LabelFrame):
         self.lbl_hud_spd.grid(row=0, column=3, sticky="w")
 
         self.lbl_hud_res = tk.Label(
-            hud_bar, text="Res: 800x600", bg="#1e293b", fg="#64748b", font=(THEME["font_mono"], 8)
+            hud_bar,
+            text="Res: 1920x1080",
+            bg="#1e293b",
+            fg="#64748b",
+            font=(THEME["font_mono"], 8),
         )
         self.lbl_hud_res.grid(row=0, column=4, sticky="e")
 
@@ -156,7 +160,7 @@ class ViewerView(ttk.LabelFrame):
 
     def _on_res_selected(self, event=None) -> None:
         preset_name = self.var_resolution.get()
-        w, h = RESOLUTION_PRESETS.get(preset_name, (800, 600))
+        w, h = RESOLUTION_PRESETS.get(preset_name, (1920, 1080))
         self.lbl_hud_res.config(text=f"Res: {w}x{h}")
         if self.on_resolution_change:
             self.on_resolution_change(w, h)
@@ -171,7 +175,7 @@ class ViewerView(ttk.LabelFrame):
             self._canvas_height = event.height
 
     def update_frame(self, pil_image: Image.Image, telemetry: Dict[str, Any]) -> None:
-        """Draws incoming camera frame preserving aspect ratio with crisp Lanczos scaling."""
+        """Draws incoming camera frames smoothly while preserving aspect ratio."""
         cw = max(self.canvas.winfo_width(), 100)
         ch = max(self.canvas.winfo_height(), 100)
         img_w, img_h = pil_image.size
@@ -184,8 +188,9 @@ class ViewerView(ttk.LabelFrame):
         if (target_w, target_h) == pil_image.size:
             display_img = pil_image
         else:
-            # Use high-quality Lanczos filter for razor-sharp downscaling/upscaling
-            display_img = pil_image.resize((target_w, target_h), Image.Resampling.LANCZOS)
+            # Bilinear scaling is substantially cheaper than Lanczos while remaining crisp
+            # at the UI scale, which keeps live updates smooth.
+            display_img = pil_image.resize((target_w, target_h), Image.Resampling.BILINEAR)
 
         self._photo_image = ImageTk.PhotoImage(display_img)
         self.canvas.delete("all")
@@ -217,11 +222,11 @@ class ViewerView(ttk.LabelFrame):
     def show_completed(self, outcome: str, flight_time: float) -> None:
         """Displays completion status overlay when an episode concludes."""
         if outcome == "goal":
-            self.lbl_view_status.config(text=f"🎯 GOAL REACHED ({flight_time:.1f}s)", fg="#10b981")
+            self.lbl_view_status.config(text=f"GOAL REACHED ({flight_time:.1f}s)", fg="#10b981")
         elif outcome == "crash":
-            self.lbl_view_status.config(text=f"💥 CRASHED ({flight_time:.1f}s)", fg="#ef4444")
+            self.lbl_view_status.config(text=f"CRASHED ({flight_time:.1f}s)", fg="#ef4444")
         else:
-            self.lbl_view_status.config(text=f"⏱️ TIMEOUT ({flight_time:.1f}s)", fg="#f59e0b")
+            self.lbl_view_status.config(text=f"TIMEOUT ({flight_time:.1f}s)", fg="#f59e0b")
 
     def _show_idle_placeholder(self) -> None:
         """Displays aesthetic placeholder graphics when idle."""
@@ -232,21 +237,21 @@ class ViewerView(ttk.LabelFrame):
         self.canvas.create_text(
             w // 2,
             h // 2 - 24,
-            text="🪰 High-Definition 3D Viewport",
+            text="High-Definition 3D Viewport",
             font=(THEME["font_family"], 14, "bold"),
             fill="#38bdf8",
         )
         self.canvas.create_text(
             w // 2,
             h // 2 + 12,
-            text="Select your model and click '▶ Launch Maze Simulation' to begin.",
+            text="Embedded GPU viewer uses the NVIDIA renderer at full resolution.",
             font=(THEME["font_family"], 10),
             fill="#94a3b8",
         )
         self.canvas.create_text(
             w // 2,
             h // 2 + 36,
-            text="Preset: High Definition (800x600) with 3D Shadows & Lighting enabled.",
+            text="Embedded GPU viewer: 1920x1080 with the fixed overview camera.",
             font=(THEME["font_family"], 9, "italic"),
             fill="#64748b",
         )

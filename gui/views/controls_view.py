@@ -140,7 +140,7 @@ class ControlsView(ttk.LabelFrame):
 
         chk_embed = ttk.Checkbutton(
             opts_frame,
-            text="Embed in GUI",
+            text="Embed in GUI (GPU Accelerated)",
             variable=self.var_embedded,
             command=self._on_input_changed,
         )

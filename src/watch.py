@@ -31,7 +31,21 @@ def main():
     ap.add_argument("--no-gui", action="store_true")
     ap.add_argument("--speed", type=float, default=1.0, help="playback speed in the GUI (2 = twice as fast)")
     ap.add_argument("--size", type=int, help="grid-maze runs: maze size (cells per side); default the training mix")
+    ap.add_argument("--width", type=int, default=1920, help="native PyBullet window width")
+    ap.add_argument("--height", type=int, default=1080, help="native PyBullet window height")
     args = ap.parse_args()
+
+    if not args.no_gui:
+        original_connect = p.connect
+        width = max(640, args.width)
+        height = max(360, args.height)
+
+        def native_gui_connect(mode, key=0, options="", **kwargs):
+            if mode == p.GUI:
+                options = f"--width={width} --height={height}"
+            return original_connect(mode, key=key, options=options, **kwargs)
+
+        p.connect = native_gui_connect
 
     best = RUNS_DIR / args.run / "model_best.pt"
     path = best if best.exists() else RUNS_DIR / args.run / "model.pt"
@@ -49,6 +63,8 @@ def main():
     for ep in range(args.episodes):
         obs, _ = env.reset(seed=args.seed + ep)
         if not args.no_gui:
+            p.configureDebugVisualizer(p.COV_ENABLE_SHADOWS, 1, physicsClientId=env.CLIENT)
+            p.configureDebugVisualizer(p.COV_ENABLE_GUI, 0, physicsClientId=env.CLIENT)
             p.resetDebugVisualizerCamera(cameraDistance=2.6 * ARENA_HALF, cameraYaw=0, cameraPitch=-65,
                                          cameraTargetPosition=[0, 0, 0], physicsClientId=env.CLIENT)
         h = agent.core.initial_state(1)
