@@ -48,7 +48,10 @@ python src/select_best.py
 python src/evaluate.py --task grid --checkpoint best
 python src/evaluate.py --task grid --checkpoint last
 
-# Watch a trained drone in the 3D simulator
+# Launch the interactive Open Day GUI
+python launch_gui.py
+
+# Or watch a trained drone directly from the command line in the 3D simulator
 python src/watch.py maze_conn_s0 --size 4
 ```
 
