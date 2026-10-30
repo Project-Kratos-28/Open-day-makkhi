@@ -345,7 +345,7 @@ class DroneMazeApp(tk.Tk):
         episodes: int,
         speed: float,
         on_gui: bool = True,
-        diff_mode: str = "popout",
+        diff_mode: str = "native",
         embedded: Optional[bool] = None,
     ) -> None:
         if embedded is not None:

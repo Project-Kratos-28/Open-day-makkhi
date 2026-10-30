@@ -46,7 +46,7 @@ class ControlsView(ttk.LabelFrame):
         self.var_episodes = tk.IntVar(value=DEFAULT_EPISODES)
         self.var_speed = tk.DoubleVar(value=DEFAULT_SPEED)
         self.var_viewer_on_gui = tk.BooleanVar(value=True)
-        self.var_diff_view_mode = tk.StringVar(value="popout")  # "popout" or "native"
+        self.var_diff_view_mode = tk.StringVar(value="native")  # "native" or "popout"
         self.var_embedded = self.var_viewer_on_gui  # Backward compatibility
         self.var_command = tk.StringVar()
 
@@ -178,11 +178,11 @@ class ControlsView(ttk.LabelFrame):
 
         self.cb_diff_type = ttk.Combobox(
             self.diff_options_frame,
-            values=["Separate Pop-out Window", "Native PyBullet 3D Window"],
+            values=["Native PyBullet 3D Window", "Separate Pop-out Window"],
             state="readonly",
             font=(THEME["font_family"], 8),
         )
-        self.cb_diff_type.set("Separate Pop-out Window")
+        self.cb_diff_type.set("Native PyBullet 3D Window")
         self.cb_diff_type.grid(row=0, column=1, sticky="ew")
         self.cb_diff_type.bind("<<ComboboxSelected>>", self._on_diff_type_selected)
 
@@ -260,8 +260,15 @@ class ControlsView(ttk.LabelFrame):
         if on_gui:
             self.lbl_viewer_hint.config(text="✔ Embedded in main GUI", foreground="#10b981")
             self.diff_options_frame.grid_remove()
+            # Reset default diff view mode to native pybullet for when unchecked
+            self.var_diff_view_mode.set("native")
+            self.cb_diff_type.set("Native PyBullet 3D Window")
         else:
-            self.lbl_viewer_hint.config(text="⤢ Different View (External)", foreground="#38bdf8")
+            diff_mode = self.var_diff_view_mode.get()
+            if diff_mode == "popout":
+                self.lbl_viewer_hint.config(text="⤢ Pop-out Window (Separate)", foreground="#38bdf8")
+            else:
+                self.lbl_viewer_hint.config(text="⤢ Native PyBullet (External)", foreground="#38bdf8")
             self.diff_options_frame.grid()
 
         self._on_input_changed()
@@ -272,8 +279,10 @@ class ControlsView(ttk.LabelFrame):
         val = self.cb_diff_type.get()
         if "Pop-out" in val:
             self.var_diff_view_mode.set("popout")
+            self.lbl_viewer_hint.config(text="⤢ Pop-out Window (Separate)", foreground="#38bdf8")
         else:
             self.var_diff_view_mode.set("native")
+            self.lbl_viewer_hint.config(text="⤢ Native PyBullet (External)", foreground="#38bdf8")
         self._on_input_changed()
         if self.on_viewer_toggle:
             self.on_viewer_toggle(self.var_viewer_on_gui.get(), self.var_diff_view_mode.get())
