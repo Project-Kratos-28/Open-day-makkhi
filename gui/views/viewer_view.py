@@ -28,11 +28,16 @@ class ViewerView(ttk.LabelFrame):
         on_camera_change: Optional[Callable[[str], None]] = None,
         on_resolution_change: Optional[Callable[[int, int], None]] = None,
         on_shadows_change: Optional[Callable[[bool], None]] = None,
+        on_dock_toggle: Optional[Callable[[], None]] = None,
+        is_popout: bool = False,
     ):
-        super().__init__(parent, text=" 3D Simulation Viewer (High-Resolution Live Viewport) ", padding=6)
+        box_title = " 3D Simulation Viewer (Separate Window) " if is_popout else " 3D Simulation Viewer (Live Viewport) "
+        super().__init__(parent, text=box_title, padding=6)
         self.on_camera_change = on_camera_change
         self.on_resolution_change = on_resolution_change
         self.on_shadows_change = on_shadows_change
+        self.on_dock_toggle = on_dock_toggle
+        self.is_popout = is_popout
 
         self.columnconfigure(0, weight=1)
         self.rowconfigure(1, weight=1)
@@ -91,7 +96,13 @@ class ViewerView(ttk.LabelFrame):
         )
         chk_shadow.grid(row=0, column=4, sticky="w", padx=(0, 10))
 
-        # 4. Live Status Badge
+        # 4. Dock / Pop-out View Toggle Button
+        if self.on_dock_toggle is not None:
+            btn_txt = "🗗 Dock to GUI" if self.is_popout else "⤢ Pop Out View"
+            btn_dock = ttk.Button(toolbar, text=btn_txt, command=self.on_dock_toggle)
+            btn_dock.grid(row=0, column=5, sticky="e", padx=(4, 8))
+
+        # 5. Live Status Badge
         self.lbl_view_status = tk.Label(
             toolbar,
             text="● STANDBY",
