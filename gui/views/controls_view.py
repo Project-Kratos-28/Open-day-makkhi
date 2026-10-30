@@ -30,12 +30,14 @@ class ControlsView(ttk.LabelFrame):
         on_launch: Callable[..., None],
         on_stop: Callable[[], None],
         on_change: Optional[Callable[[], None]] = None,
+        on_viewer_toggle: Optional[Callable[[bool, str], None]] = None,
     ):
         super().__init__(parent, text=" Simulation Parameters ", padding=8)
         self.data_manager = data_manager
         self.on_launch = on_launch
         self.on_stop = on_stop
         self.on_change = on_change
+        self.on_viewer_toggle = on_viewer_toggle
 
         # Observable Tk variables
         self.var_model = tk.StringVar(value=DEFAULT_MODEL_KEY)
@@ -43,7 +45,9 @@ class ControlsView(ttk.LabelFrame):
         self.var_size = tk.IntVar(value=DEFAULT_MAZE_SIZE)
         self.var_episodes = tk.IntVar(value=DEFAULT_EPISODES)
         self.var_speed = tk.DoubleVar(value=DEFAULT_SPEED)
-        self.var_embedded = tk.BooleanVar(value=True)
+        self.var_viewer_on_gui = tk.BooleanVar(value=True)
+        self.var_diff_view_mode = tk.StringVar(value="popout")  # "popout" or "native"
+        self.var_embedded = self.var_viewer_on_gui  # Backward compatibility
         self.var_command = tk.StringVar()
 
         self._build_ui()
@@ -110,7 +114,7 @@ class ControlsView(ttk.LabelFrame):
             )
             rb.pack(side="left", padx=2)
 
-        # --- Section 3: Runtime Options (Episodes, Speed, Viewer Mode) ---
+        # --- Section 3: Runtime Options (Episodes, Speed) ---
         opts_frame = ttk.Frame(self)
         opts_frame.grid(row=3, column=0, sticky="ew", pady=(0, 4))
 
@@ -138,17 +142,56 @@ class ControlsView(ttk.LabelFrame):
         cb_spd.pack(side="left", padx=(0, 8))
         cb_spd.bind("<<ComboboxSelected>>", lambda e: self._on_speed_selected(cb_spd.get()))
 
-        chk_embed = ttk.Checkbutton(
-            opts_frame,
-            text="Embed in GUI (GPU Accelerated)",
-            variable=self.var_embedded,
-            command=self._on_input_changed,
-        )
-        chk_embed.pack(side="left")
+        # --- Section 4: Simulation Viewer Mode (GUI vs Different View) ---
+        viewer_frame = ttk.LabelFrame(self, text=" Simulation Viewer Display ", padding=(8, 4))
+        viewer_frame.grid(row=4, column=0, sticky="ew", pady=(0, 4))
+        viewer_frame.columnconfigure(1, weight=1)
 
-        # --- Section 4: Command Preview ---
+        self.chk_viewer = ttk.Checkbutton(
+            viewer_frame,
+            text="Open Sim Viewer on GUI",
+            variable=self.var_viewer_on_gui,
+            command=self._on_viewer_checkbox_changed,
+        )
+        self.chk_viewer.grid(row=0, column=0, sticky="w", padx=(0, 4), pady=2)
+
+        self.lbl_viewer_hint = ttk.Label(
+            viewer_frame,
+            text="✔ Embedded in main GUI",
+            font=(THEME["font_family"], 8, "bold"),
+            foreground="#10b981",
+        )
+        self.lbl_viewer_hint.grid(row=0, column=1, sticky="e", pady=2)
+
+        # Sub-row for different view options when unchecked
+        self.diff_options_frame = ttk.Frame(viewer_frame)
+        self.diff_options_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(2, 2))
+        self.diff_options_frame.columnconfigure(1, weight=1)
+
+        lbl_diff_type = ttk.Label(
+            self.diff_options_frame,
+            text="Different View:",
+            font=(THEME["font_family"], 8),
+            foreground="#94a3b8",
+        )
+        lbl_diff_type.grid(row=0, column=0, sticky="w", padx=(0, 4))
+
+        self.cb_diff_type = ttk.Combobox(
+            self.diff_options_frame,
+            values=["Separate Pop-out Window", "Native PyBullet 3D Window"],
+            state="readonly",
+            font=(THEME["font_family"], 8),
+        )
+        self.cb_diff_type.set("Separate Pop-out Window")
+        self.cb_diff_type.grid(row=0, column=1, sticky="ew")
+        self.cb_diff_type.bind("<<ComboboxSelected>>", self._on_diff_type_selected)
+
+        # Initially hidden since default is On GUI
+        self.diff_options_frame.grid_remove()
+
+        # --- Section 5: Command Preview ---
         cmd_box = ttk.LabelFrame(self, text=" Generated Command Preview ", padding=4)
-        cmd_box.grid(row=4, column=0, sticky="ew", pady=(0, 4))
+        cmd_box.grid(row=5, column=0, sticky="ew", pady=(0, 4))
         cmd_box.columnconfigure(0, weight=1)
 
         ent_cmd = ttk.Entry(
@@ -164,11 +207,11 @@ class ControlsView(ttk.LabelFrame):
             text="Checking checkpoint...",
             font=(THEME["font_family"], 8, "italic"),
         )
-        self.lbl_ckpt_status.grid(row=5, column=0, sticky="w", pady=(0, 4))
+        self.lbl_ckpt_status.grid(row=6, column=0, sticky="w", pady=(0, 4))
 
-        # --- Section 5: Launch & Stop Action Buttons ---
+        # --- Section 6: Launch & Stop Action Buttons ---
         btn_bar = ttk.Frame(self)
-        btn_bar.grid(row=6, column=0, sticky="ew")
+        btn_bar.grid(row=7, column=0, sticky="ew")
         btn_bar.columnconfigure(0, weight=1)
         btn_bar.columnconfigure(1, weight=1)
 
@@ -212,6 +255,29 @@ class ControlsView(ttk.LabelFrame):
         self.var_speed.set(val)
         self._on_input_changed()
 
+    def _on_viewer_checkbox_changed(self) -> None:
+        on_gui = self.var_viewer_on_gui.get()
+        if on_gui:
+            self.lbl_viewer_hint.config(text="✔ Embedded in main GUI", foreground="#10b981")
+            self.diff_options_frame.grid_remove()
+        else:
+            self.lbl_viewer_hint.config(text="⤢ Different View (External)", foreground="#38bdf8")
+            self.diff_options_frame.grid()
+
+        self._on_input_changed()
+        if self.on_viewer_toggle:
+            self.on_viewer_toggle(on_gui, self.var_diff_view_mode.get())
+
+    def _on_diff_type_selected(self, event=None) -> None:
+        val = self.cb_diff_type.get()
+        if "Pop-out" in val:
+            self.var_diff_view_mode.set("popout")
+        else:
+            self.var_diff_view_mode.set("native")
+        self._on_input_changed()
+        if self.on_viewer_toggle:
+            self.on_viewer_toggle(self.var_viewer_on_gui.get(), self.var_diff_view_mode.get())
+
     def _on_input_changed(self) -> None:
         self._update_command_preview()
         if self.on_change:
@@ -223,7 +289,8 @@ class ControlsView(ttk.LabelFrame):
         size = self.var_size.get()
         ep = self.var_episodes.get()
         speed = self.var_speed.get()
-        embed = self.var_embedded.get()
+        on_gui = self.var_viewer_on_gui.get()
+        diff_mode = self.var_diff_view_mode.get()
 
         info = self.data_manager.get_checkpoint_info(model, seed)
         run_name = info.run_name
@@ -233,8 +300,13 @@ class ControlsView(ttk.LabelFrame):
             cmd_parts.append(f"--episodes {ep}")
         if speed != 1.0:
             cmd_parts.append(f"--speed {speed}")
-        if not embed:
-            cmd_parts.append("(External PyBullet Window)")
+        if on_gui:
+            cmd_parts.append("(Embedded on GUI)")
+        else:
+            if diff_mode == "native":
+                cmd_parts.append("(External PyBullet Window)")
+            else:
+                cmd_parts.append("(Separate Pop-out Window)")
 
         self.var_command.set(" ".join(cmd_parts))
 
@@ -258,7 +330,8 @@ class ControlsView(ttk.LabelFrame):
         size = self.var_size.get()
         ep = max(1, self.var_episodes.get())
         speed = self.var_speed.get()
-        embed = self.var_embedded.get()
+        on_gui = self.var_viewer_on_gui.get()
+        diff_mode = self.var_diff_view_mode.get()
 
         info = self.data_manager.get_checkpoint_info(model, seed)
         self.on_launch(
@@ -266,7 +339,9 @@ class ControlsView(ttk.LabelFrame):
             size=size,
             episodes=ep,
             speed=speed,
-            embedded=embed,
+            on_gui=on_gui,
+            diff_mode=diff_mode,
+            embedded=on_gui,
         )
 
     def set_running_state(self, running: bool) -> None:

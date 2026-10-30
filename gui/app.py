@@ -8,7 +8,7 @@ import sys
 import threading
 import tkinter as tk
 from tkinter import messagebox, ttk
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from PIL import Image
 
@@ -41,6 +41,10 @@ class DroneMazeApp(tk.Tk):
         self._frame_lock = threading.Lock()
         self._latest_frame = None
 
+        self._popout_window: Optional[tk.Toplevel] = None
+        self._popout_viewer: Optional[ViewerView] = None
+        self._placeholder_frame: Optional[tk.Frame] = None
+
         self.runner = SimulationRunner(
             on_frame=self._queue_frame,
             on_line=self._queue_line,
@@ -52,6 +56,8 @@ class DroneMazeApp(tk.Tk):
 
         self._build_layout()
         self._poll_queue()
+
+        self.protocol("WM_DELETE_WINDOW", self._on_close_app)
 
         # Initial synchronization
         self._on_parameters_changed()
@@ -113,6 +119,7 @@ class DroneMazeApp(tk.Tk):
             on_launch=self._launch_simulation,
             on_stop=self._stop_simulation,
             on_change=self._on_parameters_changed,
+            on_viewer_toggle=self._on_viewer_mode_changed,
         )
         self.controls_view.grid(row=0, column=0, sticky="ew", pady=(0, 6))
 
@@ -140,18 +147,83 @@ class DroneMazeApp(tk.Tk):
         right_col.columnconfigure(0, weight=1)
         right_col.rowconfigure(0, weight=0)
         right_col.rowconfigure(1, weight=1)
+        self.right_col = right_col
 
         # Top: KPI Metrics Cards
         self.metrics_view = MetricsView(right_col)
         self.metrics_view.grid(row=0, column=0, sticky="ew", pady=(0, 6))
 
         # Main: Full-size Dedicated 3D Simulation Viewport
-        self.viewer_view = ViewerView(
+        self.embedded_viewer = ViewerView(
             right_col,
             on_camera_change=self.runner.set_camera_mode,
             on_resolution_change=self.runner.set_render_resolution,
+            on_dock_toggle=self._undock_viewer_to_popout,
+            is_popout=False,
         )
-        self.viewer_view.grid(row=1, column=0, sticky="nsew")
+        self.embedded_viewer.grid(row=1, column=0, sticky="nsew")
+        self.viewer_view = self.embedded_viewer  # Backward compatibility
+        self.active_viewer = self.embedded_viewer
+
+        # Placeholder frame for when Sim Viewer is displayed in a different view
+        self._placeholder_frame = tk.Frame(right_col, bg="#0b1120", bd=1, relief="solid")
+        self._placeholder_frame.columnconfigure(0, weight=1)
+        self._placeholder_frame.rowconfigure(0, weight=1)
+
+        ph_inner = tk.Frame(self._placeholder_frame, bg="#0b1120", padx=20, pady=20)
+        ph_inner.grid(row=0, column=0)
+
+        self.lbl_ph_title = tk.Label(
+            ph_inner,
+            text="🖥️ Sim Viewer: Running in Different View",
+            font=(THEME["font_family"], 13, "bold"),
+            bg="#0b1120",
+            fg="#38bdf8",
+        )
+        self.lbl_ph_title.pack(pady=(0, 10))
+
+        self.lbl_ph_desc = tk.Label(
+            ph_inner,
+            text="",
+            font=(THEME["font_family"], 9),
+            bg="#0b1120",
+            fg="#94a3b8",
+            justify="center",
+        )
+        self.lbl_ph_desc.pack(pady=(0, 16))
+
+        ph_btn_bar = tk.Frame(ph_inner, bg="#0b1120")
+        ph_btn_bar.pack()
+
+        self.btn_ph_front = tk.Button(
+            ph_btn_bar,
+            text="⤢ Bring Viewer to Front",
+            font=(THEME["font_family"], 9, "bold"),
+            bg="#0284c7",
+            fg="#ffffff",
+            activebackground="#0369a1",
+            activeforeground="#ffffff",
+            padx=10,
+            pady=5,
+            cursor="hand2",
+            command=self._focus_popout_window,
+        )
+        self.btn_ph_front.pack(side="left", padx=6)
+
+        self.btn_ph_dock = tk.Button(
+            ph_btn_bar,
+            text="🗗 Dock Sim Viewer to Main GUI",
+            font=(THEME["font_family"], 9, "bold"),
+            bg="#059669",
+            fg="#ffffff",
+            activebackground="#047857",
+            activeforeground="#ffffff",
+            padx=10,
+            pady=5,
+            cursor="hand2",
+            command=self._dock_viewer_to_gui,
+        )
+        self.btn_ph_dock.pack(side="left", padx=6)
 
         # Bottom Status Bar
         status_bar = ttk.Frame(self, relief="sunken", padding=(8, 4))
@@ -169,14 +241,116 @@ class DroneMazeApp(tk.Tk):
         info = self.data_manager.get_checkpoint_info(model, seed)
         self.metrics_view.update_model_info(info)
 
+    def _on_viewer_mode_changed(self, on_gui: bool, diff_mode: str) -> None:
+        """Handles switching simulation viewer between on-GUI and separate/external view."""
+        if on_gui:
+            if self._popout_window is not None:
+                try:
+                    self._popout_window.destroy()
+                except Exception:
+                    pass
+                self._popout_window = None
+                self._popout_viewer = None
+
+            if self._placeholder_frame is not None:
+                self._placeholder_frame.grid_remove()
+
+            self.embedded_viewer.grid(row=1, column=0, sticky="nsew")
+            self.active_viewer = self.embedded_viewer
+            self.lbl_status.config(text="Sim Viewer display: Embedded on GUI main window.")
+        else:
+            self.embedded_viewer.grid_remove()
+            if diff_mode == "popout":
+                self.lbl_ph_title.config(text="🖥️ Sim Viewer: Pop-out Window (Separate View)")
+                self.lbl_ph_desc.config(
+                    text="The 3D Simulation Viewer is active in a separate window.\nYou can move it to another monitor or resize it to full screen."
+                )
+                self.btn_ph_front.pack(side="left", padx=6)
+                self._placeholder_frame.grid(row=1, column=0, sticky="nsew")
+                self._ensure_popout_window()
+                self.active_viewer = self._popout_viewer
+                self.lbl_status.config(text="Sim Viewer display: Separate Pop-out Window.")
+            else:
+                if self._popout_window is not None:
+                    try:
+                        self._popout_window.destroy()
+                    except Exception:
+                        pass
+                    self._popout_window = None
+                    self._popout_viewer = None
+
+                self.lbl_ph_title.config(text="🖥️ Sim Viewer: External PyBullet 3D Window")
+                self.lbl_ph_desc.config(
+                    text="When simulation is launched, PyBullet's native OpenGL 3D window will open.\n\n• Left-click + drag: Rotate camera in 3D\n• Right-click + drag: Zoom in / out\n• Middle-click + drag: Pan camera"
+                )
+                self.btn_ph_front.pack_forget()
+                self._placeholder_frame.grid(row=1, column=0, sticky="nsew")
+                self.active_viewer = self.embedded_viewer
+                self.lbl_status.config(text="Sim Viewer display: Native PyBullet 3D Window (External).")
+
+    def _dock_viewer_to_gui(self) -> None:
+        self.controls_view.var_viewer_on_gui.set(True)
+        self.controls_view._on_viewer_checkbox_changed()
+
+    def _undock_viewer_to_popout(self) -> None:
+        self.controls_view.var_viewer_on_gui.set(False)
+        self.controls_view.var_diff_view_mode.set("popout")
+        self.controls_view.cb_diff_type.set("Separate Pop-out Window")
+        self.controls_view._on_viewer_checkbox_changed()
+
+    def _ensure_popout_window(self) -> None:
+        if self._popout_window is None or not self._popout_window.winfo_exists():
+            self._popout_window = tk.Toplevel(self)
+            self._popout_window.title("Fruit Fly 3D Simulation Viewer (Separate View)")
+            self._popout_window.geometry("960x650")
+            self._popout_window.minsize(640, 480)
+            self._popout_window.protocol("WM_DELETE_WINDOW", self._dock_viewer_to_gui)
+
+            self._popout_viewer = ViewerView(
+                self._popout_window,
+                on_camera_change=self.runner.set_camera_mode,
+                on_resolution_change=self.runner.set_render_resolution,
+                on_dock_toggle=self._dock_viewer_to_gui,
+                is_popout=True,
+            )
+            self._popout_viewer.pack(fill="both", expand=True, padx=6, pady=6)
+            self._popout_viewer.var_camera.set(self.embedded_viewer.var_camera.get())
+            self._popout_viewer.var_resolution.set(self.embedded_viewer.var_resolution.get())
+            self._popout_viewer.var_shadows.set(self.embedded_viewer.var_shadows.get())
+        else:
+            self._focus_popout_window()
+
+    def _focus_popout_window(self) -> None:
+        if self._popout_window is not None and self._popout_window.winfo_exists():
+            self._popout_window.deiconify()
+            self._popout_window.lift()
+            self._popout_window.focus_force()
+
+    def _on_close_app(self) -> None:
+        try:
+            self.runner.stop()
+        except Exception:
+            pass
+        if self._popout_window is not None:
+            try:
+                self._popout_window.destroy()
+            except Exception:
+                pass
+        self.destroy()
+
     def _launch_simulation(
         self,
         run_name: str,
         size: int,
         episodes: int,
         speed: float,
-        embedded: bool,
+        on_gui: bool = True,
+        diff_mode: str = "popout",
+        embedded: Optional[bool] = None,
     ) -> None:
+        if embedded is not None:
+            on_gui = embedded
+
         self.metrics_view.reset_live_summary()
         self.controls_view.set_running_state(True)
         self.lbl_head_status.config(text="● Simulation Running", fg="#38bdf8")
@@ -185,14 +359,24 @@ class DroneMazeApp(tk.Tk):
         self.left_notebook.select(0)
 
         try:
+            if on_gui:
+                use_embedded = True
+                mode_desc = "Embedded Viewport (On GUI)"
+            elif diff_mode == "popout":
+                use_embedded = True
+                self._ensure_popout_window()
+                mode_desc = "Pop-out Viewport (Separate Window)"
+            else:
+                use_embedded = False
+                mode_desc = "External PyBullet Window"
+
             cmd = self.runner.start(
                 run_name=run_name,
                 size=size,
                 episodes=episodes,
                 speed=speed,
-                embedded=embedded,
+                embedded=use_embedded,
             )
-            mode_desc = "Embedded Viewport" if embedded else "External Window"
             self.logs_view.append_line(f"=== [EXEC ({mode_desc})] {' '.join(cmd)} ===")
         except Exception as e:
             messagebox.showerror("Launch Error", f"Could not start simulation:\n{e}")
@@ -233,7 +417,8 @@ class DroneMazeApp(tk.Tk):
                 self._latest_frame = None
             if latest_frame is not None:
                 img, tel = latest_frame
-                self.viewer_view.update_frame(img, tel)
+                if self.active_viewer is not None:
+                    self.active_viewer.update_frame(img, tel)
 
             while True:
                 item = self.msg_queue.get_nowait()
@@ -242,7 +427,8 @@ class DroneMazeApp(tk.Tk):
                     self.logs_view.append_line(payload)
                 elif kind == "episode":
                     self.episodes_view.add_episode(payload)
-                    self.viewer_view.show_completed(payload.outcome, payload.time_s)
+                    if self.active_viewer is not None:
+                        self.active_viewer.show_completed(payload.outcome, payload.time_s)
                 elif kind == "summary":
                     self.metrics_view.update_live_summary(payload)
                 elif kind == "status":
